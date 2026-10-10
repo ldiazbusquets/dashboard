@@ -30,6 +30,11 @@ jobs:
         with:
           node-version: 22
 
+      - name: Collect the site files
+        run: |
+          mkdir -p site
+          cp index.html app.js style.css config.js site/
+
       - name: Fetch Canvas data and encrypt it
         env:
           CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
@@ -37,7 +42,7 @@ jobs:
           DASH_PASSPHRASE: ${{ secrets.DASH_PASSPHRASE }}
           WINDOW_DAYS: "14"
           INCLUDE_GRADES: "false"
-        run: node scripts/fetch-canvas.mjs
+        run: node fetch-canvas.mjs
 
       - uses: actions/configure-pages@v5
 
