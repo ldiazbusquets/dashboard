@@ -144,6 +144,7 @@
   let dismissed = [];
   try { dismissed = JSON.parse(store.get('dash_dismissed') || '[]'); } catch { dismissed = []; }
   let showDismissed = false;
+  let showAllAnns = false;
   function setDismissed(id, on) {
     dismissed = dismissed.filter((x) => x !== id);
     if (on) dismissed.push(id);
@@ -171,8 +172,8 @@
   function render() {
     if (!data) return;
     const now = Date.now();
-    document.title = cfg.title || 'Dashboard';
     tick();
+    focusTick();
 
     const gen = new Date(data.generatedAt);
     const age = now - gen.getTime();
@@ -242,41 +243,57 @@
     }
     $('upcoming').replaceChildren(...(nodes.length ? nodes : [h('p', { class: 'empty' }, 'Nothing due in this window.')]));
 
-    // Calendar events
+    // Calendar events (the card hides itself when there is nothing to show)
     const events = (data.events || []).filter((e) => new Date(e.startAt).getTime() > now - 36e5);
-    $('events').replaceChildren(...(events.length
-      ? events.map((e) => {
-          const s = new Date(e.startAt);
-          const sub = [e.course, `${dayLabel(s)}, ${fmtDate(s)} at ${fmtTime(s)}`, e.location].filter(Boolean).join(' · ');
-          return itemRow(e, sub, null);
-        })
-      : [h('p', { class: 'empty' }, 'No calendar events in this window.')]));
+    $('events-card').hidden = events.length === 0;
+    $('events').replaceChildren(...events.map((e) => {
+      const s = new Date(e.startAt);
+      const sub = [e.course, `${dayLabel(s)}, ${fmtDate(s)} at ${fmtTime(s)}`, e.location].filter(Boolean).join(' · ');
+      return itemRow(e, sub, null);
+    }));
 
-    // Announcements
-    const anns = data.announcements || [];
-    $('announcements').replaceChildren(...(anns.length
-      ? anns.map((a) => {
-          const url = safeUrl(a.url);
-          const body = [
-            h('div', { class: 'row-main' },
-              h('div', { class: 'row-title' }, a.title || 'Announcement'),
-              h('div', { class: 'row-sub' }, `${a.course} · ${relative(now - new Date(a.postedAt).getTime())} ago`),
-              a.text ? h('div', { class: 'row-sub' }, a.text) : null),
-          ];
-          return url ? h('a', { class: 'row', href: url, target: '_blank', rel: 'noopener noreferrer' }, body) : h('div', { class: 'row' }, body);
-        })
-      : [h('p', { class: 'empty' }, 'No announcements in the last two weeks.')]));
+    // Announcements: one line each from the last 7 days, newest first. Click one to read it.
+    const anns = (data.announcements || []).filter((a) => now - new Date(a.postedAt).getTime() < 7 * 864e5);
+    const annNode = (a) => {
+      const url = safeUrl(a.url);
+      return h('details', { class: 'ann' },
+        h('summary', null,
+          h('span', { class: 'ann-title' }, a.title || 'Announcement'),
+          h('span', { class: 'ann-meta' }, `${(a.course || '').split(' · ')[0]} · ${relative(now - new Date(a.postedAt).getTime())}`)),
+        h('div', { class: 'ann-body' },
+          a.text ? h('p', null, a.text) : null,
+          url ? h('a', { class: 'ann-link', href: url, target: '_blank', rel: 'noopener noreferrer' }, 'Open in Canvas') : null));
+    };
+    const annShown = showAllAnns ? anns : anns.slice(0, 4);
+    const annNodes = anns.length ? annShown.map(annNode) : [h('p', { class: 'empty' }, 'Nothing new this week.')];
+    if (anns.length > 4) {
+      annNodes.push(h('button', { class: 'linkish', type: 'button', onclick: () => { showAllAnns = !showAllAnns; render(); } },
+        showAllAnns ? 'Show fewer' : `Show ${anns.length - 4} more`));
+    }
+    // Keep announcements the user has opened from snapping shut on the once-a-minute redraw.
+    const openTitles = new Set([...$('announcements').querySelectorAll('details[open] .ann-title')].map((n) => n.textContent));
+    $('announcements').replaceChildren(...annNodes);
+    for (const d of $('announcements').querySelectorAll('details')) {
+      if (openTitles.has(d.querySelector('.ann-title').textContent)) d.open = true;
+    }
 
-    // Courses
-    const courses = data.courses || [];
+    // Courses: real classes only (names that start with a course code such as "FIN458 ·"),
+    // plus anything else that actually has work open or missing.
+    const isClass = (c) => /^[A-Z]{2,5}\s?\d{3}[A-Z]? · /.test(c.name);
+    const courses = (data.courses || []).map((c) => ({
+      c,
+      due: open.filter((i) => i.course === c.name).length,
+      miss: missing.filter((i) => i.course === c.name).length,
+    })).filter((x) => isClass(x.c) || x.due || x.miss);
     $('courses').replaceChildren(...(courses.length
-      ? courses.map((c) => {
-          const due = open.filter((i) => i.course === c.name).length;
-          const miss = missing.filter((i) => i.course === c.name).length;
-          const sub = [c.code, plural(due, 'item') + ' open', miss ? `${miss} missing` : null, c.score != null ? `${c.score}%` : null]
-            .filter(Boolean).join(' · ');
-          return h('div', { class: 'row' }, h('div', { class: 'row-main' },
-            h('div', { class: 'row-title' }, c.name), h('div', { class: 'row-sub' }, sub)));
+      ? courses.map(({ c, due, miss }) => {
+          const [code, ...rest] = c.name.split(' · ');
+          return h('div', { class: 'course' },
+            h('span', { class: 'course-code' }, rest.length ? code : c.name),
+            h('span', { class: 'course-name' }, rest.join(' · ')),
+            miss ? h('span', { class: 'chip late' }, `${miss} missing`) : null,
+            h('span', { class: 'chip' + (due ? '' : ' quiet') }, due ? `${due} open` : 'clear'),
+            c.score != null ? h('span', { class: 'chip' }, `${c.score}%`) : null);
         })
       : [h('p', { class: 'empty' }, 'No active courses found.')]));
   }
@@ -425,6 +442,75 @@
     if (!spTimer) spTimer = setInterval(pollSpotify, 10000);
   }
 
+  // ---------- Focus timer ----------
+  // A focus block followed by a short break. The end time is saved, so the timer
+  // keeps counting correctly through refreshes and while the tab is in the background.
+
+  const FOCUS_KEY = 'dash_focus';
+  const PRESETS = [{ focus: 25, rest: 5 }, { focus: 50, rest: 10 }, { focus: 90, rest: 15 }];
+  let focus = { preset: 0, mode: 'focus', endsAt: null, left: null, day: '', done: 0 };
+  try { focus = { ...focus, ...JSON.parse(store.get(FOCUS_KEY) || '{}') }; } catch { /* keep defaults */ }
+  const todayKey = () => new Date().toDateString();
+  const saveFocus = () => store.set(FOCUS_KEY, JSON.stringify(focus));
+  const blockMs = () => PRESETS[focus.preset][focus.mode === 'focus' ? 'focus' : 'rest'] * 60000;
+
+  function chime() {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const ac = new AC();
+      [660, 880].forEach((freq, i) => {
+        const o = ac.createOscillator(), g = ac.createGain();
+        o.type = 'sine'; o.frequency.value = freq;
+        const t = ac.currentTime + i * 0.28;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.18, t + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+        o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + 1);
+      });
+      setTimeout(() => ac.close(), 2500);
+    } catch { /* sound is optional */ }
+  }
+
+  function focusTick() {
+    if (focus.day !== todayKey()) { focus.day = todayKey(); focus.done = 0; saveFocus(); }
+    const running = focus.endsAt != null;
+    let left = running ? focus.endsAt - Date.now() : (focus.left != null ? focus.left : blockMs());
+    if (running && left <= 0) {
+      chime();
+      if (focus.mode === 'focus') {
+        focus.done += 1; focus.mode = 'rest'; focus.endsAt = Date.now() + blockMs();   // break starts by itself
+      } else {
+        focus.mode = 'focus'; focus.endsAt = null;                                      // then wait for the user
+      }
+      focus.left = null; saveFocus();
+      return focusTick();
+    }
+    left = Math.max(0, left);
+    const secs = Math.ceil(left / 1000);
+    const text = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+    $('focus-time').textContent = text;
+    $('focus-mode').textContent = focus.mode === 'focus' ? 'Focus' : 'Break';
+    $('focus-fill').style.width = (100 - (left / blockMs()) * 100) + '%';
+    $('focus-toggle').textContent = running ? 'Pause' : (focus.left != null ? 'Resume' : 'Start');
+    $('focus-count').textContent = `${plural(focus.done, 'session')} today`;
+    $('focus-card').classList.toggle('resting', focus.mode === 'rest');
+    for (const b of $('focus-presets').children) b.classList.toggle('on', Number(b.dataset.i) === focus.preset);
+    if (passphrase) document.title = running ? `${text} · ${focus.mode === 'focus' ? 'Focus' : 'Break'}` : (cfg.title || 'Dashboard');
+  }
+
+  $('focus-presets').replaceChildren(...PRESETS.map((p, i) =>
+    h('button', { class: 'ghost tiny', type: 'button', 'data-i': String(i), onclick: () => {
+      focus.preset = i; focus.mode = 'focus'; focus.endsAt = null; focus.left = null; saveFocus(); focusTick();
+    } }, `${p.focus} min`)));
+  $('focus-toggle').addEventListener('click', () => {
+    if (focus.endsAt != null) { focus.left = Math.max(0, focus.endsAt - Date.now()); focus.endsAt = null; }
+    else { focus.endsAt = Date.now() + (focus.left != null ? focus.left : blockMs()); focus.left = null; }
+    saveFocus(); focusTick();
+  });
+  $('focus-reset').addEventListener('click', () => { focus.mode = 'focus'; focus.endsAt = null; focus.left = null; saveFocus(); focusTick(); });
+  setInterval(focusTick, 500);
+  focusTick();
+
   // ---------- Clock and greeting ----------
 
   function tick() {
@@ -467,6 +553,12 @@
       const v = document.createElement('video');
       v.muted = true; v.loop = true; v.playsInline = true; v.preload = 'auto';
       v.setAttribute('muted', ''); v.setAttribute('playsinline', '');
+      // When a clip is about to finish, fade to the next one instead of repeating it.
+      // (With a single video there is nothing to skip to, so it just loops.)
+      v.addEventListener('timeupdate', () => {
+        if (v !== active || switching || paused || list.length < 2 || !isFinite(v.duration)) return;
+        if (v.currentTime > 1 && v.duration - v.currentTime < 1.7) next();
+      });
       scene.prepend(v);
       return v;
     };

@@ -61,21 +61,35 @@
       </section>
     </div>
     <div class="col">
+      <section class="card glass" id="focus-card">
+        <div class="card-head">
+          <h2 id="focus-mode">Focus</h2>
+          <div id="focus-presets" class="presets"></div>
+        </div>
+        <div id="focus-time" class="focus-time">25:00</div>
+        <div class="bar"><div id="focus-fill"></div></div>
+        <div class="controls">
+          <button id="focus-toggle" type="button">Start</button>
+          <button id="focus-reset" class="ghost" type="button">Reset</button>
+          <span class="spacer"></span>
+          <span id="focus-count" class="focus-count"></span>
+        </div>
+      </section>
       <section class="card glass" id="spotify-card">
         <h2>Spotify</h2>
         <div id="spotify"></div>
       </section>
-      <section class="card glass">
+      <section class="card glass" id="events-card" hidden>
         <h2>Calendar</h2>
         <div id="events"></div>
       </section>
       <section class="card glass">
-        <h2>Announcements</h2>
-        <div id="announcements"></div>
-      </section>
-      <section class="card glass">
         <h2>Courses</h2>
         <div id="courses"></div>
+      </section>
+      <section class="card glass">
+        <h2>Announcements</h2>
+        <div id="announcements"></div>
       </section>
     </div>
   </div>
