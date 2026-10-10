@@ -1,0 +1,281 @@
+#!/usr/bin/env node
+// Pulls your Canvas data, encrypts it with your passphrase, and writes the
+// ciphertext to site/data.enc.json. Only encrypted data ever leaves this script.
+//
+// Required environment variables (set as GitHub Actions secrets):
+//   CANVAS_BASE_URL   e.g. https://yourschool.instructure.com
+//   CANVAS_TOKEN      personal access token from Canvas > Account > Settings
+//   DASH_PASSPHRASE   the passphrase you type on the site's lock screen
+// Optional:
+//   WINDOW_DAYS       how far ahead to look (default 14)
+//   INCLUDE_GRADES    "true" to include each course's current score
+//
+// Run with --sample to write made-up data instead (no Canvas token needed).
+//
+// NOTE: Actions logs are public on a public repo, so this script only ever
+// logs counts, never course or assignment names.
+
+import { writeFile, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
+
+const OUT = process.env.OUT_FILE || 'site/data.enc.json';
+const WINDOW_DAYS = Number(process.env.WINDOW_DAYS || 14);
+const INCLUDE_GRADES = process.env.INCLUDE_GRADES === 'true';
+const PBKDF2_ITERATIONS = 600_000;
+const SAMPLE = process.argv.includes('--sample');
+
+const PASSPHRASE = (process.env.DASH_PASSPHRASE || '').normalize('NFKC').trim();
+const TOKEN = (process.env.CANVAS_TOKEN || '').trim();
+let BASE = (process.env.CANVAS_BASE_URL || '').trim().replace(/\/+$/, '');
+if (BASE && !/^https?:\/\//.test(BASE)) BASE = 'https://' + BASE;
+
+function fail(msg) {
+  console.error('ERROR: ' + msg);
+  process.exit(1);
+}
+
+if (!PASSPHRASE) fail('DASH_PASSPHRASE is not set.');
+if (PASSPHRASE.length < 12) fail('DASH_PASSPHRASE is too short. Use at least 12 characters (4-5 random words is ideal).');
+if (!SAMPLE && (!BASE || !TOKEN)) fail('CANVAS_BASE_URL and CANVAS_TOKEN must both be set.');
+
+// ---------- Canvas API ----------
+
+async function getAll(path, params = []) {
+  const url = new URL(BASE + '/api/v1' + path);
+  for (const [k, v] of params) url.searchParams.append(k, v);
+  url.searchParams.set('per_page', '100');
+  const origin = url.origin;
+  const out = [];
+  let next = url.toString();
+  let pages = 0;
+  while (next && pages++ < 50) {
+    if (new URL(next).origin !== origin) break; // never send the token to another host
+    const res = await fetch(next, {
+      headers: { Authorization: `Bearer ${TOKEN}`, Accept: 'application/json' },
+    });
+    if (!res.ok) throw new Error(`Canvas returned ${res.status} for ${path.replace(/\d+/g, ':id')}`);
+    const body = await res.json();
+    if (Array.isArray(body)) out.push(...body);
+    else out.push(body);
+    const link = res.headers.get('link') || '';
+    const m = link.split(',').map((s) => s.match(/<([^>]+)>;\s*rel="next"/)).find(Boolean);
+    next = m ? m[1] : null;
+  }
+  return out;
+}
+
+const chunk = (arr, n) => Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
+
+function htmlToText(html, max = 280) {
+  const text = String(html || '')
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > max ? text.slice(0, max - 1).trimEnd() + '…' : text;
+}
+
+async function fetchCanvas() {
+  const now = new Date();
+  const windowEnd = new Date(now.getTime() + WINDOW_DAYS * 864e5);
+  const warnings = [];
+
+  const rawCourses = await getAll('/courses', [
+    ['enrollment_state', 'active'],
+    ['include[]', 'term'],
+    ['include[]', 'total_scores'],
+  ]);
+  const courses = rawCourses.filter(
+    (c) => c && c.name && !c.access_restricted_by_date && !(c.term?.end_at && new Date(c.term.end_at) < now),
+  );
+  const courseName = new Map(courses.map((c) => [c.id, c.name]));
+
+  const missing = [];
+  const upcoming = [];
+
+  for (const c of courses) {
+    let assignments;
+    try {
+      assignments = await getAll(`/courses/${c.id}/assignments`, [
+        ['include[]', 'submission'],
+        ['order_by', 'due_at'],
+      ]);
+    } catch (e) {
+      warnings.push('Could not read assignments for one course.');
+      console.warn('warn: ' + e.message);
+      continue;
+    }
+    for (const a of assignments) {
+      if (!a.due_at || a.published === false) continue;
+      const due = new Date(a.due_at);
+      const sub = a.submission || {};
+      const types = a.submission_types || [];
+      const noSubmit = types.some((t) => ['none', 'not_graded', 'on_paper'].includes(t));
+      const done = !!sub.excused || !!sub.submitted_at || (sub.workflow_state === 'graded' && sub.score != null);
+      const item = {
+        id: a.id,
+        course: c.name,
+        name: a.name,
+        dueAt: a.due_at,
+        url: a.html_url,
+        points: a.points_possible ?? null,
+        type: types.includes('online_quiz') ? 'quiz' : types.includes('discussion_topic') ? 'discussion' : 'assignment',
+        done,
+        noSubmit,
+      };
+      const isMissing = !done && !noSubmit && (sub.missing === true || (sub.missing == null && due < now));
+      if (isMissing) missing.push(item);
+      else if (due >= now && due <= windowEnd) upcoming.push(item);
+    }
+  }
+
+  const codes = courses.map((c) => `course_${c.id}`);
+  const fromCode = (code) => courseName.get(Number(String(code || '').replace('course_', ''))) || '';
+
+  const announcements = [];
+  const events = [];
+  for (const group of chunk(codes, 10)) {
+    const ctx = group.map((code) => ['context_codes[]', code]);
+    try {
+      const list = await getAll('/announcements', [
+        ...ctx,
+        ['start_date', new Date(now.getTime() - 14 * 864e5).toISOString()],
+        ['end_date', now.toISOString()],
+      ]);
+      for (const n of list) {
+        announcements.push({
+          id: n.id,
+          course: fromCode(n.context_code),
+          title: n.title,
+          text: htmlToText(n.message),
+          postedAt: n.posted_at,
+          url: n.html_url,
+        });
+      }
+    } catch (e) {
+      warnings.push('Could not read some announcements.');
+      console.warn('warn: ' + e.message);
+    }
+    try {
+      const list = await getAll('/calendar_events', [
+        ...ctx,
+        ['type', 'event'],
+        ['start_date', now.toISOString()],
+        ['end_date', windowEnd.toISOString()],
+      ]);
+      for (const ev of list) {
+        if (!ev.start_at) continue;
+        events.push({
+          id: ev.id,
+          course: fromCode(ev.context_code),
+          title: ev.title,
+          startAt: ev.start_at,
+          location: ev.location_name || '',
+          url: ev.html_url,
+        });
+      }
+    } catch (e) {
+      warnings.push('Could not read some calendar events.');
+      console.warn('warn: ' + e.message);
+    }
+  }
+
+  missing.sort((a, b) => new Date(b.dueAt) - new Date(a.dueAt));
+  upcoming.sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt));
+  events.sort((a, b) => new Date(a.startAt) - new Date(b.startAt));
+  announcements.sort((a, b) => new Date(b.postedAt) - new Date(a.postedAt));
+
+  return {
+    generatedAt: now.toISOString(),
+    windowDays: WINDOW_DAYS,
+    courses: courses.map((c) => ({
+      id: c.id,
+      name: c.name,
+      code: c.course_code || '',
+      score: INCLUDE_GRADES ? c.enrollments?.[0]?.computed_current_score ?? null : null,
+    })),
+    missing,
+    upcoming,
+    events,
+    announcements: announcements.slice(0, 12),
+    warnings: [...new Set(warnings)],
+  };
+}
+
+// ---------- Sample data (for trying the site before connecting Canvas) ----------
+
+function sampleData() {
+  const now = Date.now();
+  const at = (hours) => new Date(now + hours * 36e5).toISOString();
+  const u = 'https://example.instructure.com/';
+  const mk = (id, course, name, hours, extra = {}) => ({
+    id, course, name, dueAt: at(hours), url: u, points: 100, type: 'assignment', done: false, noSubmit: false, ...extra,
+  });
+  return {
+    generatedAt: new Date(now).toISOString(),
+    windowDays: 14,
+    courses: [
+      { id: 1, name: 'Sample Course A', code: 'AAA 101', score: null },
+      { id: 2, name: 'Sample Course B', code: 'BBB 202', score: null },
+      { id: 3, name: 'Sample Course C', code: 'CCC 303', score: null },
+    ],
+    missing: [mk(10, 'Sample Course B', 'Problem Set 4', -52, { points: 40 })],
+    upcoming: [
+      mk(11, 'Sample Course A', 'Chapter 6 Quiz', 5, { type: 'quiz', points: 20 }),
+      mk(12, 'Sample Course C', 'Discussion: Week 7', 20, { type: 'discussion', points: 10, done: true }),
+      mk(13, 'Sample Course B', 'Case Write-up', 44),
+      mk(14, 'Sample Course A', 'Midterm Exam (in class)', 96, { noSubmit: true }),
+      mk(15, 'Sample Course C', 'Group Project Outline', 150, { points: 50 }),
+      mk(16, 'Sample Course B', 'Problem Set 5', 220, { points: 40 }),
+    ],
+    events: [
+      { id: 20, course: 'Sample Course A', title: 'Midterm review session', startAt: at(70), location: 'Room 204', url: u },
+    ],
+    announcements: [
+      { id: 30, course: 'Sample Course B', title: 'Office hours moved this week', text: 'Office hours move to Thursday at 3 PM this week only.', postedAt: at(-6), url: u },
+      { id: 31, course: 'Sample Course A', title: 'Midterm covers chapters 1–6', text: 'Bring a calculator. A formula sheet will be provided.', postedAt: at(-30), url: u },
+    ],
+    warnings: ['This is sample data. Run the workflow with your Canvas secrets to see the real thing.'],
+  };
+}
+
+// ---------- Encryption (AES-256-GCM, key derived with PBKDF2-SHA256) ----------
+
+async function encrypt(obj, passphrase) {
+  const { subtle } = globalThis.crypto;
+  const enc = new TextEncoder();
+  const salt = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+  const material = await subtle.importKey('raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+  const key = await subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    material,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt'],
+  );
+  const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(obj))));
+  const b64 = (u8) => Buffer.from(u8).toString('base64');
+  return { v: 1, kdf: 'PBKDF2-SHA256', iter: PBKDF2_ITERATIONS, salt: b64(salt), iv: b64(iv), ct: b64(ct) };
+}
+
+// ---------- Main ----------
+
+try {
+  const data = SAMPLE ? sampleData() : await fetchCanvas();
+  const blob = await encrypt(data, PASSPHRASE);
+  await mkdir(dirname(OUT), { recursive: true });
+  await writeFile(OUT, JSON.stringify(blob));
+  console.log(
+    `Wrote encrypted data: ${data.courses.length} courses, ${data.upcoming.length} upcoming, ` +
+      `${data.missing.length} missing, ${data.events.length} events, ${data.announcements.length} announcements.`,
+  );
+} catch (e) {
+  fail(e.message);
+}

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; connect-src 'self' https://api.spotify.com https://accounts.spotify.com; base-uri 'none'; form-action 'none'">
+<title>Dashboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<main id="lock" class="lock" hidden>
+  <form id="lock-form" class="lock-card" autocomplete="off">
+    <div class="lock-mark" aria-hidden="true"></div>
+    <h1>Locked</h1>
+    <p class="muted">Enter your passphrase to decrypt the dashboard.</p>
+    <label class="sr-only" for="pass">Passphrase</label>
+    <input id="pass" type="password" placeholder="Passphrase" autocomplete="current-password" required>
+    <label class="check"><input id="remember" type="checkbox" checked> Remember on this device</label>
+    <button type="submit" id="unlock-btn">Unlock</button>
+    <p id="lock-msg" class="lock-msg" role="alert"></p>
+  </form>
+</main>
+
+<div id="app" hidden>
+  <header class="top">
+    <div>
+      <h1 id="title">Dashboard</h1>
+      <p id="updated" class="muted"></p>
+    </div>
+    <div class="top-actions">
+      <button id="refresh" class="ghost" type="button">Refresh</button>
+      <button id="lock-btn" class="ghost" type="button">Lock</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <section class="stats" id="stats" aria-label="Summary"></section>
+
+  <div class="grid">
+    <div class="col">
+      <section class="card" id="missing-card">
+        <h2>Missing</h2>
+        <div id="missing"></div>
+      </section>
+      <section class="card">
+        <div class="card-head">
+          <h2 id="upcoming-title">Due soon</h2>
+          <label class="check small"><input id="hide-done" type="checkbox"> Hide submitted</label>
+        </div>
+        <div id="upcoming"></div>
+      </section>
+    </div>
+    <div class="col">
+      <section class="card" id="spotify-card">
+        <h2>Spotify</h2>
+        <div id="spotify"></div>
+      </section>
+      <section class="card">
+        <h2>Calendar</h2>
+        <div id="events"></div>
+      </section>
+      <section class="card">
+        <h2>Announcements</h2>
+        <div id="announcements"></div>
+      </section>
+      <section class="card">
+        <h2>Courses</h2>
+        <div id="courses"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

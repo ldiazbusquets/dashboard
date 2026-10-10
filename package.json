@@ -1,0 +1,9 @@
+{
+  "name": "dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "fetch": "node scripts/fetch-canvas.mjs",
+    "sample": "node scripts/fetch-canvas.mjs --sample"
+  }
+}

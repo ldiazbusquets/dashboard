@@ -1,0 +1,5 @@
+# Generated fresh on every workflow run and deployed straight to Pages;
+# it never needs to be committed.
+site/data.enc.json
+node_modules/
+.env
