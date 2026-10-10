@@ -34,6 +34,8 @@ jobs:
         run: |
           mkdir -p site
           cp index.html app.js style.css config.js site/
+          find videos -maxdepth 1 -type f \( -iname '*.mp4' -o -iname '*.webm' \) -exec cp {} site/ \; 2>/dev/null || true
+          (ls site | grep -Ei '\.(mp4|webm)$' || true) | jq -R . | jq -s . > site/videos.json
 
       - name: Fetch Canvas data and encrypt it
         env:
