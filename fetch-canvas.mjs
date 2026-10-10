@@ -254,7 +254,85 @@ function sampleData() {
       { id: 30, course: 'Sample Course B', title: 'Office hours moved this week', text: 'Office hours move to Thursday at 3 PM this week only.', postedAt: at(-6), url: u },
       { id: 31, course: 'Sample Course A', title: 'Midterm covers chapters 1–6', text: 'Bring a calculator. A formula sheet will be provided.', postedAt: at(-30), url: u },
     ],
+    markets: [
+      { symbol: 'SPY', price: 612.34, changePct: 0.42, spark: [598, 601, 600, 604, 603, 607, 605, 609, 608, 611, 610, 612.34] },
+      { symbol: 'QQQ', price: 541.1, changePct: -0.31, spark: [548, 547, 549, 545, 546, 544, 545, 543, 544, 542, 543, 541.1] },
+      { symbol: 'DIA', price: 455.02, changePct: 0.12, spark: [450, 451, 452, 451, 453, 452, 454, 453, 454, 455, 454, 455.02] },
+      { symbol: 'IWM', price: 231.77, changePct: 1.08, spark: [224, 225, 224, 226, 227, 226, 228, 229, 228, 230, 229, 231.77] },
+    ],
+    weather: { temp: 61, feels: 59, text: 'Partly cloudy', hi: 66, lo: 49, rain: 20 },
     warnings: ['This is sample data. Run the workflow with your Canvas secrets to see the real thing.'],
+  };
+}
+
+// ---------- Markets and weather (optional extras; a failure here never blocks the Canvas data) ----------
+
+// TICKERS secret: comma-separated symbols, e.g. "SPY, QQQ, AAPL". Unset = a few index ETFs. "none" = off.
+export async function fetchMarkets() {
+  const raw = (process.env.TICKERS || '').trim();
+  if (/^(none|off)$/i.test(raw)) return [];
+  const symbols = (raw || 'SPY, QQQ, DIA, IWM').split(/[\s,]+/).map((x) => x.toUpperCase())
+    .filter((x) => /^[A-Z0-9.^=-]{1,12}$/.test(x)).slice(0, 12);
+  const out = [];
+  for (const sym of symbols) {
+    try {
+      const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=1mo&interval=1d`, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36', Accept: 'application/json' },
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const r = (await res.json())?.chart?.result?.[0];
+      const closes = (r?.indicators?.quote?.[0]?.close || []).filter((x) => typeof x === 'number');
+      const price = typeof r?.meta?.regularMarketPrice === 'number' ? r.meta.regularMarketPrice : closes[closes.length - 1];
+      const prev = closes.length > 1 ? closes[closes.length - 2] : null;
+      if (typeof price !== 'number') throw new Error('no price');
+      out.push({
+        symbol: sym,
+        price,
+        changePct: prev ? ((price - prev) / prev) * 100 : null,
+        spark: closes.slice(-22).map((x) => Math.round(x * 100) / 100),
+      });
+    } catch (e) {
+      console.warn('warn: one market quote failed (' + e.message + ')');
+    }
+  }
+  return out;
+}
+
+const WMO = { 0: 'Clear', 1: 'Mostly clear', 2: 'Partly cloudy', 3: 'Overcast', 45: 'Fog', 48: 'Fog', 51: 'Drizzle', 53: 'Drizzle', 55: 'Drizzle',
+  56: 'Freezing drizzle', 57: 'Freezing drizzle', 61: 'Light rain', 63: 'Rain', 65: 'Heavy rain', 66: 'Freezing rain', 67: 'Freezing rain',
+  71: 'Light snow', 73: 'Snow', 75: 'Heavy snow', 77: 'Snow', 80: 'Showers', 81: 'Showers', 82: 'Heavy showers', 85: 'Snow showers', 86: 'Snow showers',
+  95: 'Thunderstorm', 96: 'Thunderstorm', 99: 'Thunderstorm' };
+
+// WEATHER_LOCATION secret: "City, State/Country" (e.g. "Smithfield, Rhode Island") or "lat,lon". Unset = off.
+export async function fetchWeather() {
+  const loc = (process.env.WEATHER_LOCATION || '').trim();
+  if (!loc) return null;
+  let lat, lon;
+  const m = loc.match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+  if (m) { lat = Number(m[1]); lon = Number(m[2]); }
+  else {
+    const [city, ...rest] = loc.split(',').map((x) => x.trim());
+    const hint = rest.join(' ').toLowerCase();
+    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?count=10&name=${encodeURIComponent(city)}`);
+    if (!res.ok) throw new Error('geocoding ' + res.status);
+    const list = (await res.json()).results || [];
+    const pick = list.find((r) => hint && [r.admin1, r.country, r.country_code].filter(Boolean).some((x) => hint.includes(String(x).toLowerCase()) || String(x).toLowerCase().includes(hint))) || list[0];
+    if (!pick) throw new Error('location not found');
+    lat = pick.latitude; lon = pick.longitude;
+  }
+  const unit = /^c/i.test(process.env.WEATHER_UNITS || '') ? 'celsius' : 'fahrenheit';
+  const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+    `&current=temperature_2m,apparent_temperature,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
+    `&temperature_unit=${unit}&timezone=auto&forecast_days=1`);
+  if (!res.ok) throw new Error('forecast ' + res.status);
+  const j = await res.json();
+  return {
+    temp: Math.round(j.current.temperature_2m),
+    feels: Math.round(j.current.apparent_temperature),
+    text: WMO[j.current.weather_code] || '',
+    hi: Math.round(j.daily.temperature_2m_max[0]),
+    lo: Math.round(j.daily.temperature_2m_min[0]),
+    rain: j.daily.precipitation_probability_max?.[0] ?? null,
   };
 }
 
@@ -282,12 +360,17 @@ async function encrypt(obj, passphrase) {
 
 if (!process.env.NO_MAIN) try {
   const data = SAMPLE ? sampleData() : await fetchCanvas();
+  if (!SAMPLE) {
+    try { data.markets = await fetchMarkets(); } catch (e) { data.markets = []; console.warn('warn: markets: ' + e.message); }
+    try { data.weather = await fetchWeather(); } catch (e) { data.weather = null; console.warn('warn: weather: ' + e.message); }
+  }
   const blob = await encrypt(data, PASSPHRASE);
   await mkdir(dirname(OUT), { recursive: true });
   await writeFile(OUT, JSON.stringify(blob));
   console.log(
     `Wrote encrypted data: ${data.courses.length} courses, ${data.upcoming.length} upcoming, ` +
-      `${data.missing.length} missing, ${data.events.length} events, ${data.announcements.length} announcements.`,
+      `${data.missing.length} missing, ${data.events.length} events, ${data.announcements.length} announcements, ` +
+      `${(data.markets || []).length} quotes, weather ${data.weather ? 'on' : 'off'}.`,
   );
 } catch (e) {
   fail(e.message);

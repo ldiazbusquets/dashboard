@@ -12,6 +12,20 @@
 <body>
 
 <div id="scene" aria-hidden="true"><div class="aurora"></div></div>
+<svg id="brand" class="brand" viewBox="-3 -3 284 106" aria-hidden="true" hidden>
+  <defs>
+    <linearGradient id="brand-glass" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.72"/>
+      <stop offset="0.48" stop-color="#fff" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0.44"/>
+    </linearGradient>
+  </defs>
+  <g fill="url(#brand-glass)" fill-rule="evenodd" stroke="#fff" stroke-opacity="0.5" stroke-width="1.6" stroke-linejoin="round">
+    <path d="M0 0h31v72h47v28H0z"/>
+    <path d="M86 0h50a46 50 0 0 1 0 100H86zM117 27v46h17a17 23 0 0 0 0-46z"/>
+    <path d="M190 0h55a27 26 0 0 1 17 46a29 28 0 0 1-15 54h-57zM221 23v17h20a8.5 8.5 0 0 0 0-17zM221 60v18h23a9 9 0 0 0 0-18z"/>
+  </g>
+</svg>
 
 <main id="lock" class="lock" hidden>
   <form id="lock-form" class="lock-card glass" autocomplete="off">
@@ -32,6 +46,7 @@
       <p id="greet" class="eyebrow"></p>
       <h1 id="clock"></h1>
       <p id="today" class="hero-date"></p>
+      <p id="weather" class="hero-weather"></p>
     </div>
     <div class="top-actions">
       <button id="scene-next" class="ghost" type="button" hidden>Next scene</button>
@@ -41,10 +56,12 @@
     </div>
   </header>
 
+  <nav id="links" class="links" aria-label="Quick links" hidden></nav>
   <p id="updated" class="updated"></p>
   <div id="banner" class="banner glass" hidden></div>
 
   <section class="stats" id="stats" aria-label="Summary"></section>
+  <section class="markets" id="markets" aria-label="Markets" hidden></section>
 
   <div class="grid">
     <div class="col">
@@ -58,6 +75,10 @@
           <label class="check small"><input id="hide-done" type="checkbox"> Hide submitted</label>
         </div>
         <div id="upcoming"></div>
+      </section>
+      <section class="card glass">
+        <h2>Announcements</h2>
+        <div id="announcements"></div>
       </section>
     </div>
     <div class="col">
@@ -75,21 +96,32 @@
           <span id="focus-count" class="focus-count"></span>
         </div>
       </section>
+      <section class="card glass">
+        <div class="card-head">
+          <h2>To do</h2>
+          <button id="todo-clear" class="linkish flat" type="button" hidden>Clear done</button>
+        </div>
+        <form id="todo-form" class="todo-form" autocomplete="off">
+          <label class="sr-only" for="todo-input">New task</label>
+          <input id="todo-input" type="text" maxlength="140" placeholder="Add a task and press Enter">
+        </form>
+        <div id="todos"></div>
+      </section>
       <section class="card glass" id="spotify-card">
         <h2>Spotify</h2>
         <div id="spotify"></div>
       </section>
-      <section class="card glass" id="events-card" hidden>
-        <h2>Calendar</h2>
-        <div id="events"></div>
+      <section class="card glass">
+        <div class="card-head">
+          <h2>Calendar</h2>
+          <span id="cal-month" class="cal-month"></span>
+        </div>
+        <div id="cal" class="cal"></div>
+        <div id="cal-list"></div>
       </section>
       <section class="card glass">
         <h2>Courses</h2>
         <div id="courses"></div>
-      </section>
-      <section class="card glass">
-        <h2>Announcements</h2>
-        <div id="announcements"></div>
       </section>
     </div>
   </div>

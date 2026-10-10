@@ -123,7 +123,7 @@
   $('lock-btn').addEventListener('click', () => {
     store.del('dash_pass');
     passphrase = null; data = null;
-    for (const id of ['missing', 'upcoming', 'events', 'announcements', 'courses', 'stats']) $(id).replaceChildren();
+    for (const id of ['missing', 'upcoming', 'cal', 'cal-list', 'announcements', 'courses', 'stats', 'markets']) $(id).replaceChildren();
     showLock('');
   });
 
@@ -145,6 +145,22 @@
   try { dismissed = JSON.parse(store.get('dash_dismissed') || '[]'); } catch { dismissed = []; }
   let showDismissed = false;
   let showAllAnns = false;
+  let calDay = null;
+
+  const SVG = 'http://www.w3.org/2000/svg';
+  function sparkline(values) {
+    const svg = document.createElementNS(SVG, 'svg');
+    svg.setAttribute('viewBox', '0 0 100 28'); svg.setAttribute('preserveAspectRatio', 'none'); svg.setAttribute('class', 'spark'); svg.setAttribute('aria-hidden', 'true');
+    if (values.length < 2) return svg;
+    const min = Math.min(...values), max = Math.max(...values), span = max - min || 1;
+    const pts = values.map((v, i) => `${(i / (values.length - 1) * 100).toFixed(1)},${(25 - ((v - min) / span) * 22).toFixed(1)}`).join(' ');
+    const line = document.createElementNS(SVG, 'polyline');
+    line.setAttribute('points', pts); line.setAttribute('fill', 'none'); line.setAttribute('stroke', 'currentColor');
+    line.setAttribute('stroke-width', '1.6'); line.setAttribute('stroke-linejoin', 'round'); line.setAttribute('stroke-linecap', 'round');
+    line.setAttribute('vector-effect', 'non-scaling-stroke');
+    svg.append(line);
+    return svg;
+  }
   function setDismissed(id, on) {
     dismissed = dismissed.filter((x) => x !== id);
     if (on) dismissed.push(id);
@@ -243,14 +259,55 @@
     }
     $('upcoming').replaceChildren(...(nodes.length ? nodes : [h('p', { class: 'empty' }, 'Nothing due in this window.')]));
 
-    // Calendar events (the card hides itself when there is nothing to show)
-    const events = (data.events || []).filter((e) => new Date(e.startAt).getTime() > now - 36e5);
-    $('events-card').hidden = events.length === 0;
-    $('events').replaceChildren(...events.map((e) => {
-      const s = new Date(e.startAt);
-      const sub = [e.course, `${dayLabel(s)}, ${fmtDate(s)} at ${fmtTime(s)}`, e.location].filter(Boolean).join(' · ');
-      return itemRow(e, sub, null);
+    // Weather line under the date
+    const w = data.weather;
+    $('weather').textContent = w
+      ? [`${w.temp}°`, w.text, `H ${w.hi}° L ${w.lo}°`, w.rain != null && w.rain >= 30 ? `${w.rain}% rain` : null].filter(Boolean).join(' · ')
+      : '';
+
+    // Markets strip
+    const mk = data.markets || [];
+    $('markets').hidden = mk.length === 0;
+    $('markets').replaceChildren(...mk.map((q) => {
+      const up = (q.changePct || 0) >= 0;
+      const pct = q.changePct == null ? '' : `${up ? '+' : ''}${q.changePct.toFixed(2)}%`;
+      return h('div', { class: 'quote glass ' + (up ? 'up' : 'down') },
+        h('div', { class: 'quote-top' }, h('span', { class: 'quote-sym' }, q.symbol), h('span', { class: 'quote-pct' }, pct)),
+        h('div', { class: 'quote-price' }, q.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })),
+        sparkline(q.spark || []));
     }));
+
+    // Calendar: three weeks starting from this week's Sunday, with Canvas due dates and events on each day.
+    const byDay = new Map();
+    const put = (iso, entry) => { const k = dayKey(new Date(iso)); if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(entry); };
+    for (const i of upcoming) put(i.dueAt, { kind: i.done ? 'done' : 'due', item: i, when: i.dueAt });
+    for (const i of missing) put(i.dueAt, { kind: 'late', item: i, when: i.dueAt });
+    for (const e of data.events || []) put(e.startAt, { kind: 'event', item: { ...e, name: e.title }, when: e.startAt });
+    const today0 = new Date(); today0.setHours(0, 0, 0, 0);
+    const start = new Date(today0); start.setDate(start.getDate() - start.getDay());
+    if (!calDay) calDay = dayKey(today0);
+    const cells = ['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d) => h('div', { class: 'cal-dow' }, d));
+    for (let n = 0; n < 21; n++) {
+      const d = new Date(start); d.setDate(start.getDate() + n);
+      const k = dayKey(d);
+      const list = byDay.get(k) || [];
+      const cls = ['cal-day', k === dayKey(today0) ? 'today' : '', d < today0 ? 'past' : '', k === calDay ? 'sel' : ''].filter(Boolean).join(' ');
+      cells.push(h('button', { class: cls, type: 'button', 'aria-label': `${d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}, ${plural(list.length, 'item')}`,
+        onclick: () => { calDay = k; render(); } },
+        h('span', { class: 'cal-num' }, String(d.getDate())),
+        h('span', { class: 'cal-dots' }, list.slice(0, 4).map((x) => h('i', { class: 'dot ' + x.kind })))));
+    }
+    $('cal').replaceChildren(...cells);
+    $('cal-month').textContent = today0.toLocaleDateString([], { month: 'long', year: 'numeric' });
+    const picked = (byDay.get(calDay) || []).slice().sort((a, b) => new Date(a.when) - new Date(b.when));
+    $('cal-list').replaceChildren(...(picked.length
+      ? picked.map((x) => {
+          const t = new Date(x.when);
+          const tag = { due: 'Due', done: 'Submitted', late: 'Missing', event: 'Event' }[x.kind];
+          return itemRow({ ...x.item, done: x.kind === 'done' }, [x.item.course, fmtTime(t)].filter(Boolean).join(' · '),
+            h('span', { class: 'chip' + (x.kind === 'late' ? ' late' : x.kind === 'done' ? ' ok' : '') }, tag));
+        })
+      : [h('p', { class: 'empty cal-empty' }, calDay === dayKey(today0) ? 'Nothing due today.' : 'Nothing on this day.')]));
 
     // Announcements: one line each from the last 7 days, newest first. Click one to read it.
     const anns = (data.announcements || []).filter((a) => now - new Date(a.postedAt).getTime() < 7 * 864e5);
@@ -441,6 +498,47 @@
     pollSpotify();
     if (!spTimer) spTimer = setInterval(pollSpotify, 10000);
   }
+
+  $('brand').toggleAttribute('hidden', cfg.brand === false || cfg.brand === '');
+
+  // ---------- Quick links (from config.js) ----------
+
+  (function renderLinks() {
+    const links = (cfg.links || []).map((l) => ({ name: String(l.name || ''), url: safeUrl(l.url) })).filter((l) => l.name && l.url);
+    $('links').hidden = links.length === 0;
+    $('links').replaceChildren(...links.map((l) => h('a', { class: 'link-pill', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.name)));
+  })();
+
+  // ---------- To-do list (saved in this browser only) ----------
+
+  let todos = [];
+  try { todos = JSON.parse(store.get('dash_todos') || '[]'); } catch { todos = []; }
+  if (!Array.isArray(todos)) todos = [];
+  const saveTodos = () => store.set('dash_todos', JSON.stringify(todos));
+  function renderTodos() {
+    const sorted = [...todos.filter((t) => !t.done), ...todos.filter((t) => t.done)];
+    $('todo-clear').hidden = !todos.some((t) => t.done);
+    $('todos').replaceChildren(...(sorted.length
+      ? sorted.map((t) => {
+          const box = h('input', { type: 'checkbox', 'aria-label': 'Done' });
+          box.checked = !!t.done;
+          box.addEventListener('change', () => { t.done = box.checked; saveTodos(); renderTodos(); });
+          return h('div', { class: 'todo' + (t.done ? ' done' : '') },
+            h('label', { class: 'todo-main' }, box, h('span', null, t.text)),
+            h('button', { class: 'todo-x', type: 'button', 'aria-label': 'Delete task', onclick: () => { todos = todos.filter((x) => x !== t); saveTodos(); renderTodos(); } }, '×'));
+        })
+      : [h('p', { class: 'empty' }, 'Nothing on your list.')]));
+  }
+  $('todo-form').addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const text = $('todo-input').value.trim();
+    if (!text) return;
+    todos.push({ id: Date.now(), text, done: false });
+    $('todo-input').value = '';
+    saveTodos(); renderTodos();
+  });
+  $('todo-clear').addEventListener('click', () => { todos = todos.filter((t) => !t.done); saveTodos(); renderTodos(); });
+  renderTodos();
 
   // ---------- Focus timer ----------
   // A focus block followed by a short break. The end time is saved, so the timer
