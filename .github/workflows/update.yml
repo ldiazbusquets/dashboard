@@ -41,8 +41,10 @@ jobs:
           CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
           CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
           DASH_PASSPHRASE: ${{ secrets.DASH_PASSPHRASE }}
+          TICKERS: ${{ secrets.TICKERS }}
+          WEATHER_LOCATION: ${{ secrets.WEATHER_LOCATION }}
           WINDOW_DAYS: "14"
-          INCLUDE_GRADES: "false"
+          INCLUDE_GRADES: "true"
         run: node fetch-canvas.mjs
 
       - uses: actions/configure-pages@v5
