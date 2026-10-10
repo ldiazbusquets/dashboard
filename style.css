@@ -116,6 +116,10 @@ button:disabled { opacity: 0.6; cursor: default; }
 .chip.late { background: var(--danger-bg); color: var(--danger); }
 .chip.ok { color: var(--ok); }
 
+button.tiny { padding: 3px 9px; font-size: 12px; flex: none; }
+button.linkish { background: none; color: var(--muted); padding: 8px 0 0; font-weight: 400; font-size: 13px; text-decoration: underline; }
+.row.dim { opacity: 0.6; }
+
 /* Spotify */
 .np { display: flex; gap: 14px; align-items: center; }
 .np img, .np .art { width: 64px; height: 64px; border-radius: 8px; flex: none; background: var(--chip); object-fit: cover; }

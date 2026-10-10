@@ -141,8 +141,24 @@
 
   // ---------- Rendering ----------
 
-  function itemRow(item, when, chip) {
+  let dismissed = [];
+  try { dismissed = JSON.parse(store.get('dash_dismissed') || '[]'); } catch { dismissed = []; }
+  let showDismissed = false;
+  function setDismissed(id, on) {
+    dismissed = dismissed.filter((x) => x !== id);
+    if (on) dismissed.push(id);
+    store.set('dash_dismissed', JSON.stringify(dismissed));
+    render();
+  }
+
+  function itemRow(item, when, chip, action) {
     const url = safeUrl(item.url);
+    if (action) {
+      const text = [h('div', { class: 'row-title' }, item.name || 'Untitled'), h('div', { class: 'row-sub' }, when)];
+      return h('div', { class: 'row' + (item.dim ? ' dim' : '') },
+        url ? h('a', { class: 'row-main', href: url, target: '_blank', rel: 'noopener noreferrer' }, text) : h('div', { class: 'row-main' }, text),
+        chip, action);
+    }
     const main = h('div', { class: 'row-main' },
       h('div', { class: 'row-title' }, item.name || item.title || 'Untitled'),
       h('div', { class: 'row-sub' }, when));
@@ -169,7 +185,9 @@
 
     // Items whose due time has passed since the last fetch drop out of "upcoming".
     const upcoming = (data.upcoming || []).filter((i) => new Date(i.dueAt).getTime() > now);
-    const missing = data.missing || [];
+    const allMissing = data.missing || [];
+    const missing = allMissing.filter((i) => !dismissed.includes(i.id));
+    const hidden = allMissing.filter((i) => dismissed.includes(i.id));
     const open = upcoming.filter((i) => !i.done);
     const in48 = open.filter((i) => new Date(i.dueAt).getTime() - now <= 48 * 36e5).length;
     const in7 = open.filter((i) => new Date(i.dueAt).getTime() - now <= 7 * 864e5).length;
@@ -186,13 +204,19 @@
 
     // Missing
     $('missing-card').classList.toggle('has-missing', missing.length > 0);
-    $('missing').replaceChildren(...(missing.length
-      ? missing.map((i) => {
-          const due = new Date(i.dueAt);
-          return itemRow(i, `${i.course} · was due ${fmtDate(due)}, ${fmtTime(due)}`,
-            h('span', { class: 'chip late' }, `${relative(now - due.getTime())} late`));
-        })
-      : [h('p', { class: 'empty' }, 'Nothing missing.')]));
+    const missRow = (i, isHidden) => {
+      const due = new Date(i.dueAt);
+      return itemRow({ ...i, dim: isHidden }, `${i.course} · was due ${fmtDate(due)}, ${fmtTime(due)}`,
+        h('span', { class: 'chip' + (isHidden ? '' : ' late') }, `${relative(now - due.getTime())} late`),
+        h('button', { class: 'ghost tiny', type: 'button', onclick: () => setDismissed(i.id, !isHidden) }, isHidden ? 'Restore' : 'Dismiss'));
+    };
+    const missNodes = missing.length ? missing.map((i) => missRow(i, false)) : [h('p', { class: 'empty' }, 'Nothing missing.')];
+    if (hidden.length) {
+      missNodes.push(h('button', { class: 'linkish', type: 'button', onclick: () => { showDismissed = !showDismissed; render(); } },
+        `${hidden.length} dismissed · ${showDismissed ? 'hide' : 'show'}`));
+      if (showDismissed) missNodes.push(...hidden.map((i) => missRow(i, true)));
+    }
+    $('missing').replaceChildren(...missNodes);
 
     // Upcoming, grouped by day
     $('hide-done').checked = store.get('dash_hide_done') === '1';

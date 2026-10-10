@@ -81,6 +81,18 @@ function htmlToText(html, max = 280) {
   return text.length > max ? text.slice(0, max - 1).trimEnd() + '…' : text;
 }
 
+// "2026FA PSY260-J Introduction to Psychology - Fleet, W, 1110am- 150pm"
+//   -> "PSY260 · Introduction to Psychology"
+export function shortName(name) {
+  let s = String(name || '').trim();
+  s = s.replace(/^\d{4}\s?[A-Z]{2}\s+/, '');                       // leading term code
+  const cut = s.lastIndexOf(' - ');
+  if (cut > 0 && /\d{1,2}:?\d{2}\s*[ap]m/i.test(s.slice(cut))) s = s.slice(0, cut); // instructor + meeting time
+  const m = s.match(/^([A-Z]{2,5}\s?\d{3}[A-Z]?)(?:-[A-Z0-9]+)?\s+(.+)$/);
+  s = m ? `${m[1]} · ${m[2]}` : s;
+  return s.trim() || String(name || '');
+}
+
 async function fetchCanvas() {
   const now = new Date();
   const windowEnd = new Date(now.getTime() + WINDOW_DAYS * 864e5);
@@ -94,6 +106,7 @@ async function fetchCanvas() {
   const courses = rawCourses.filter(
     (c) => c && c.name && !c.access_restricted_by_date && !(c.term?.end_at && new Date(c.term.end_at) < now),
   );
+  for (const c of courses) c.name = shortName(c.name);
   const courseName = new Map(courses.map((c) => [c.id, c.name]));
 
   const missing = [];
@@ -197,7 +210,7 @@ async function fetchCanvas() {
     courses: courses.map((c) => ({
       id: c.id,
       name: c.name,
-      code: c.course_code || '',
+      code: '',
       score: INCLUDE_GRADES ? c.enrollments?.[0]?.computed_current_score ?? null : null,
     })),
     missing,
@@ -267,7 +280,7 @@ async function encrypt(obj, passphrase) {
 
 // ---------- Main ----------
 
-try {
+if (!process.env.NO_MAIN) try {
   const data = SAMPLE ? sampleData() : await fetchCanvas();
   const blob = await encrypt(data, PASSPHRASE);
   await mkdir(dirname(OUT), { recursive: true });
