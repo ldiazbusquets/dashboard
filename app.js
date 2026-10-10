@@ -361,7 +361,7 @@
     authorize: 'https://accounts.spotify.com/authorize',
     token: 'https://accounts.spotify.com/api/token',
     api: 'https://api.spotify.com/v1',
-    scopes: 'user-read-currently-playing user-read-playback-state user-read-recently-played user-modify-playback-state',
+    scopes: 'user-read-currently-playing user-read-playback-state user-modify-playback-state',
   };
   const redirectUri = () => location.origin + location.pathname.replace(/index\.html$/, '');
   const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -371,8 +371,6 @@
   try { spTokens = JSON.parse(store.get('sp_tokens') || 'null'); } catch { spTokens = null; }
   let spMsg = '';
   let spTimer = null;
-  let spTick = 0;
-  let spRecent = [];
 
   function saveTokens(t, prev) {
     spTokens = { access: t.access_token, refresh: t.refresh_token || (prev && prev.refresh) || null, exp: Date.now() + (t.expires_in || 3600) * 1000 };
@@ -471,24 +469,13 @@
         h('button', { class: 'ghost', type: 'button', 'aria-label': 'Next track', onclick: () => spControl('POST', '/me/player/next') }, 'Next'),
         h('span', { class: 'spacer' }),
         h('button', { class: 'ghost', type: 'button', onclick: () => { clearTokens(); renderSpotify(null); } }, 'Disconnect')),
-      h('p', { class: 'sp-msg' }, spMsg),
-      spRecent.length ? h('div', { class: 'recent' },
-        h('div', { class: 'recent-title' }, 'Recently played'),
-        spRecent.map((r) => h('div', { class: 'row' }, h('div', { class: 'row-main' },
-          h('div', { class: 'row-title' }, r.name), h('div', { class: 'row-sub' }, r.artists))))) : null,
+      spMsg ? h('p', { class: 'sp-msg' }, spMsg) : null,
     );
   }
 
   async function pollSpotify() {
     if (!cfg.spotifyClientId || !spTokens || document.hidden || !passphrase) { renderSpotify(null); return; }
     try {
-      if (spTick++ % 6 === 0) {
-        const r = await spFetch('/me/player/recently-played?limit=5');
-        if (r.ok) {
-          const j = await r.json();
-          spRecent = (j.items || []).map((x) => ({ name: x.track.name, artists: (x.track.artists || []).map((a) => a.name).join(', ') }));
-        }
-      }
       const res = await spFetch('/me/player/currently-playing?additional_types=episode');
       renderSpotify(res.status === 200 ? await res.json() : null);
     } catch { renderSpotify(null); }
