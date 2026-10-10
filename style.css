@@ -12,9 +12,9 @@
   --line: hsl(0 0% 100% / 0.13);
   --accent: hsl(var(--h) calc(var(--sa) * 1%) 76%);
   --accent-ink: hsl(var(--h) 45% 10%);
-  --danger: #ffa59b;
-  --danger-bg: hsl(6 85% 62% / 0.17);
-  --danger-line: hsl(6 85% 72% / 0.5);
+  --danger: #ff5449;
+  --danger-bg: hsl(4 92% 52% / 0.2);
+  --danger-line: hsl(4 95% 60% / 0.7);
   --warn: #ffd596;
   --warn-bg: hsl(38 90% 60% / 0.17);
   --chip: hsl(0 0% 100% / 0.09);
