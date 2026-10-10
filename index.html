@@ -5,14 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; connect-src 'self' https://api.spotify.com https://accounts.spotify.com; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; media-src 'self'; connect-src 'self' https://api.spotify.com https://accounts.spotify.com; base-uri 'none'; form-action 'none'">
 <title>Dashboard</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
+<div id="scene" aria-hidden="true"><div class="aurora"></div></div>
+
 <main id="lock" class="lock" hidden>
-  <form id="lock-form" class="lock-card" autocomplete="off">
+  <form id="lock-form" class="lock-card glass" autocomplete="off">
     <div class="lock-mark" aria-hidden="true"></div>
     <h1>Locked</h1>
     <p class="muted">Enter your passphrase to decrypt the dashboard.</p>
@@ -25,28 +27,32 @@
 </main>
 
 <div id="app" hidden>
-  <header class="top">
+  <header class="hero">
     <div>
-      <h1 id="title">Dashboard</h1>
-      <p id="updated" class="muted"></p>
+      <p id="greet" class="eyebrow"></p>
+      <h1 id="clock"></h1>
+      <p id="today" class="hero-date"></p>
     </div>
     <div class="top-actions">
+      <button id="scene-next" class="ghost" type="button" hidden>Next scene</button>
+      <button id="scene-btn" class="ghost" type="button" hidden>Pause scene</button>
       <button id="refresh" class="ghost" type="button">Refresh</button>
       <button id="lock-btn" class="ghost" type="button">Lock</button>
     </div>
   </header>
 
-  <div id="banner" class="banner" hidden></div>
+  <p id="updated" class="updated"></p>
+  <div id="banner" class="banner glass" hidden></div>
 
   <section class="stats" id="stats" aria-label="Summary"></section>
 
   <div class="grid">
     <div class="col">
-      <section class="card" id="missing-card">
+      <section class="card glass" id="missing-card">
         <h2>Missing</h2>
         <div id="missing"></div>
       </section>
-      <section class="card">
+      <section class="card glass">
         <div class="card-head">
           <h2 id="upcoming-title">Due soon</h2>
           <label class="check small"><input id="hide-done" type="checkbox"> Hide submitted</label>
@@ -55,19 +61,19 @@
       </section>
     </div>
     <div class="col">
-      <section class="card" id="spotify-card">
+      <section class="card glass" id="spotify-card">
         <h2>Spotify</h2>
         <div id="spotify"></div>
       </section>
-      <section class="card">
+      <section class="card glass">
         <h2>Calendar</h2>
         <div id="events"></div>
       </section>
-      <section class="card">
+      <section class="card glass">
         <h2>Announcements</h2>
         <div id="announcements"></div>
       </section>
-      <section class="card">
+      <section class="card glass">
         <h2>Courses</h2>
         <div id="courses"></div>
       </section>

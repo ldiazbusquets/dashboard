@@ -171,8 +171,8 @@
   function render() {
     if (!data) return;
     const now = Date.now();
-    $('title').textContent = cfg.title || 'Dashboard';
     document.title = cfg.title || 'Dashboard';
+    tick();
 
     const gen = new Date(data.generatedAt);
     const age = now - gen.getTime();
@@ -194,7 +194,7 @@
     const doneCount = upcoming.length - open.length;
 
     const stat = (num, label, alert) =>
-      h('div', { class: 'stat' + (alert ? ' alert' : '') }, h('div', { class: 'stat-num' }, String(num)), h('div', { class: 'stat-label' }, label));
+      h('div', { class: 'stat glass' + (alert ? ' alert' : '') }, h('div', { class: 'stat-num' }, String(num)), h('div', { class: 'stat-label' }, label));
     $('stats').replaceChildren(
       stat(missing.length, 'Missing', missing.length > 0),
       stat(in48, 'Due in 48 hours'),
@@ -424,6 +424,157 @@
     pollSpotify();
     if (!spTimer) spTimer = setInterval(pollSpotify, 10000);
   }
+
+  // ---------- Clock and greeting ----------
+
+  function tick() {
+    const d = new Date();
+    const hr = d.getHours();
+    const hello = hr < 5 ? 'Good night' : hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
+    $('greet').textContent = hello + (cfg.name ? ', ' + cfg.name : '');
+    $('clock').textContent = fmtTime(d);
+    $('today').textContent = d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+  }
+  setInterval(tick, 5000);
+
+  // ---------- Background video and adaptive color ----------
+  // Plays a muted, looping video behind the top of the page, then samples its
+  // frames and steers the page's hue toward the video's dominant color.
+
+  async function initScene() {
+    // Videos come from videos.json (written by the workflow: every .mp4/.webm in the repo),
+    // falling back to the list in config.js.
+    let list = [];
+    try {
+      const res = await fetch('videos.json', { cache: 'no-store' });
+      if (res.ok) list = (await res.json()).filter((f) => typeof f === 'string' && /^[\w .()-]+\.(mp4|webm)$/i.test(f));
+    } catch { /* no manifest */ }
+    if (!list.length) list = [].concat(cfg.backgroundVideo || []).filter(Boolean);
+    if (!list.length) return;
+
+    // Shuffle, then walk the list in order so nothing repeats until all have played.
+    for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
+    const holdSeconds = Math.max(10, Number(cfg.sceneSeconds) || 60);
+
+    const scene = $('scene');
+    const btn = $('scene-btn');
+    const nextBtn = $('scene-next');
+    const root = document.documentElement;
+    const reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let paused = store.get('dash_scene_paused') === '1' || reduceMotion;
+
+    const mk = () => {
+      const v = document.createElement('video');
+      v.muted = true; v.loop = true; v.playsInline = true; v.preload = 'auto';
+      v.setAttribute('muted', ''); v.setAttribute('playsinline', '');
+      scene.prepend(v);
+      return v;
+    };
+    let active = mk();
+    let spare = mk();
+    let index = -1;
+    let elapsed = 0;
+    let switching = false;
+    let started = false;
+
+    const cv = document.createElement('canvas');
+    cv.width = 32; cv.height = 18;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    const cur = { h: 205, s: 30, sa: 62 };
+    let target = null;
+    let canSample = true;
+
+    function sample() {
+      const v = active;
+      if (!canSample || v.readyState < 2) return;
+      try {
+        ctx.drawImage(v, 0, 0, cv.width, cv.height);
+        const px = ctx.getImageData(0, 0, cv.width, cv.height).data;
+        let x = 0, y = 0, wsum = 0, chroma = 0;
+        for (let i = 0; i < px.length; i += 4) {
+          const r = px[i] / 255, g = px[i + 1] / 255, b = px[i + 2] / 255;
+          const max = Math.max(r, g, b), min = Math.min(r, g, b), c = max - min;
+          chroma += c;
+          if (c < 0.04) continue;
+          let hue = max === r ? ((g - b) / c) % 6 : max === g ? (b - r) / c + 2 : (r - g) / c + 4;
+          hue *= Math.PI / 3;
+          x += Math.cos(hue) * c; y += Math.sin(hue) * c; wsum += c;
+        }
+        const avgChroma = chroma / (px.length / 4);
+        if (wsum === 0) { target = { h: cur.h, s: 6, sa: 14 }; return; }
+        const hue = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+        // How strongly the colors agree on one hue (0 = rainbow, 1 = single color).
+        const agree = Math.hypot(x, y) / wsum;
+        const strength = Math.min(1, avgChroma * 3.2) * (0.35 + 0.65 * agree);
+        target = { h: hue, s: 10 + 34 * strength, sa: 26 + 52 * strength };
+      } catch { canSample = false; }
+    }
+
+    function ease() {
+      if (!target) return;
+      const dh = ((target.h - cur.h + 540) % 360) - 180;
+      const ds = target.s - cur.s, da = target.sa - cur.sa;
+      if (Math.abs(dh) < 0.3 && Math.abs(ds) < 0.3 && Math.abs(da) < 0.3) return;
+      cur.h = (cur.h + dh * 0.12 + 360) % 360; cur.s += ds * 0.12; cur.sa += da * 0.12;
+      root.style.setProperty('--h', cur.h.toFixed(1));
+      root.style.setProperty('--s', cur.s.toFixed(1));
+      root.style.setProperty('--sa', cur.sa.toFixed(1));
+    }
+
+    function apply() {
+      btn.textContent = paused ? 'Play scene' : 'Pause scene';
+      if (paused || document.hidden) active.pause(); else active.play().catch(() => {});
+    }
+
+    // Loads the next clip into the hidden layer and crossfades to it once it can play.
+    function next() {
+      if (switching || !list.length) return;
+      switching = true;
+      index = (index + 1) % list.length;
+      const file = list[index];
+      const incoming = spare;
+      const done = () => { incoming.removeEventListener('loadeddata', ok); incoming.removeEventListener('error', bad); };
+      const ok = () => {
+        done();
+        const outgoing = active;
+        active = incoming; spare = outgoing;
+        incoming.classList.add('on');
+        outgoing.classList.remove('on');
+        setTimeout(() => { outgoing.pause(); outgoing.removeAttribute('src'); outgoing.load(); }, 2000);
+        elapsed = 0; switching = false;
+        if (!started) {
+          started = true;
+          scene.classList.add('has-video');
+          btn.hidden = false;
+          nextBtn.hidden = list.length < 2;
+          setInterval(() => { if (!document.hidden && !active.paused) sample(); }, 1500);
+          setInterval(() => { if (!document.hidden) ease(); }, 120);
+          setInterval(() => {
+            if (document.hidden || paused || list.length < 2) return;
+            if (++elapsed >= holdSeconds) next();
+          }, 1000);
+        }
+        apply();
+        sample();
+      };
+      const bad = () => {
+        done();
+        list.splice(index, 1); index -= 1; switching = false;   // drop a clip that will not load
+        nextBtn.hidden = list.length < 2;
+        if (list.length && (list.length > 1 || !started)) next();
+      };
+      incoming.addEventListener('loadeddata', ok);
+      incoming.addEventListener('error', bad);
+      incoming.src = encodeURI(file);
+      incoming.load();
+    }
+
+    btn.addEventListener('click', () => { paused = !paused; store.set('dash_scene_paused', paused ? '1' : ''); apply(); });
+    nextBtn.addEventListener('click', next);
+    document.addEventListener('visibilitychange', apply);
+    next();
+  }
+  initScene();
 
   // ---------- Start ----------
 
