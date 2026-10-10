@@ -456,7 +456,8 @@
     fill.style.width = pct + '%';
     const playing = !!(now && now.is_playing);
 
-    box.replaceChildren(
+    // filter(Boolean): replaceChildren would print a literal "null" for an empty slot
+    box.replaceChildren(...[
       h('div', { class: 'np' },
         art ? h('img', { src: art, alt: '', referrerpolicy: 'no-referrer' }) : h('div', { class: 'art' }),
         h('div', { class: 'row-main' },
@@ -470,7 +471,7 @@
         h('span', { class: 'spacer' }),
         h('button', { class: 'ghost', type: 'button', onclick: () => { clearTokens(); renderSpotify(null); } }, 'Disconnect')),
       spMsg ? h('p', { class: 'sp-msg' }, spMsg) : null,
-    );
+    ].filter(Boolean));
   }
 
   async function pollSpotify() {

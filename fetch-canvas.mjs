@@ -268,34 +268,54 @@ function sampleData() {
 // ---------- Markets and weather (optional extras; a failure here never blocks the Canvas data) ----------
 
 // TICKERS secret: comma-separated symbols, e.g. "SPY, QQQ, AAPL". Unset = a few index ETFs. "none" = off.
+const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
+const quote = (symbol, price, closes) => {
+  const prev = closes.length > 1 ? closes[closes.length - 2] : null;
+  return { symbol, price, changePct: prev ? ((price - prev) / prev) * 100 : null, spark: closes.slice(-22).map((x) => Math.round(x * 100) / 100) };
+};
+
+async function yahooQuote(sym, host) {
+  const res = await fetch(`https://${host}/v8/finance/chart/${encodeURIComponent(sym)}?range=1mo&interval=1d`, {
+    headers: { 'User-Agent': UA, Accept: 'application/json' },
+  });
+  if (!res.ok) throw new Error(`yahoo ${res.status}`);
+  const r = (await res.json())?.chart?.result?.[0];
+  const closes = (r?.indicators?.quote?.[0]?.close || []).filter((x) => typeof x === 'number');
+  const price = typeof r?.meta?.regularMarketPrice === 'number' ? r.meta.regularMarketPrice : closes[closes.length - 1];
+  if (typeof price !== 'number') throw new Error('yahoo no price');
+  if (closes.length) closes[closes.length - 1] = price;
+  return quote(sym, price, closes);
+}
+
+// Backup source: Stooq end-of-day history (US-listed stocks and ETFs only).
+async function stooqQuote(sym) {
+  if (!/^[A-Z][A-Z0-9.-]*$/.test(sym)) throw new Error('stooq unsupported symbol');
+  const res = await fetch(`https://stooq.com/q/d/l/?s=${encodeURIComponent(sym.toLowerCase().replace('.', '-'))}.us&i=d`, { headers: { 'User-Agent': UA } });
+  if (!res.ok) throw new Error(`stooq ${res.status}`);
+  const lines = (await res.text()).trim().split(/\r?\n/);
+  if (!/^Date,Open,High,Low,Close/i.test(lines[0] || '')) throw new Error('stooq no data');
+  const closes = lines.slice(1).slice(-30).map((l) => Number(l.split(',')[4])).filter((x) => Number.isFinite(x) && x > 0);
+  if (!closes.length) throw new Error('stooq no data');
+  return quote(sym, closes[closes.length - 1], closes);
+}
+
+// TICKERS secret: comma-separated symbols, e.g. "SPY, QQQ, AAPL". Unset = a few index ETFs. "none" = off.
+// Returns { quotes, wanted } so the caller can tell "turned off" apart from "source refused".
 export async function fetchMarkets() {
   const raw = (process.env.TICKERS || '').trim();
-  if (/^(none|off)$/i.test(raw)) return [];
+  if (/^(none|off)$/i.test(raw)) return { quotes: [], wanted: 0 };
   const symbols = (raw || 'SPY, QQQ, DIA, IWM').split(/[\s,]+/).map((x) => x.toUpperCase())
     .filter((x) => /^[A-Z0-9.^=-]{1,12}$/.test(x)).slice(0, 12);
-  const out = [];
+  const quotes = [];
+  const reasons = new Set();
   for (const sym of symbols) {
-    try {
-      const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=1mo&interval=1d`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36', Accept: 'application/json' },
-      });
-      if (!res.ok) throw new Error(String(res.status));
-      const r = (await res.json())?.chart?.result?.[0];
-      const closes = (r?.indicators?.quote?.[0]?.close || []).filter((x) => typeof x === 'number');
-      const price = typeof r?.meta?.regularMarketPrice === 'number' ? r.meta.regularMarketPrice : closes[closes.length - 1];
-      const prev = closes.length > 1 ? closes[closes.length - 2] : null;
-      if (typeof price !== 'number') throw new Error('no price');
-      out.push({
-        symbol: sym,
-        price,
-        changePct: prev ? ((price - prev) / prev) * 100 : null,
-        spark: closes.slice(-22).map((x) => Math.round(x * 100) / 100),
-      });
-    } catch (e) {
-      console.warn('warn: one market quote failed (' + e.message + ')');
+    const attempts = [() => yahooQuote(sym, 'query1.finance.yahoo.com'), () => yahooQuote(sym, 'query2.finance.yahoo.com'), () => stooqQuote(sym)];
+    for (const attempt of attempts) {
+      try { quotes.push(await attempt()); break; } catch (e) { reasons.add(e.message); }
     }
   }
-  return out;
+  if (quotes.length < symbols.length) console.warn(`warn: ${symbols.length - quotes.length} of ${symbols.length} quotes failed (${[...reasons].join(', ')})`);
+  return { quotes, wanted: symbols.length };
 }
 
 const WMO = { 0: 'Clear', 1: 'Mostly clear', 2: 'Partly cloudy', 3: 'Overcast', 45: 'Fog', 48: 'Fog', 51: 'Drizzle', 53: 'Drizzle', 55: 'Drizzle',
@@ -361,8 +381,12 @@ async function encrypt(obj, passphrase) {
 if (!process.env.NO_MAIN) try {
   const data = SAMPLE ? sampleData() : await fetchCanvas();
   if (!SAMPLE) {
-    try { data.markets = await fetchMarkets(); } catch (e) { data.markets = []; console.warn('warn: markets: ' + e.message); }
-    try { data.weather = await fetchWeather(); } catch (e) { data.weather = null; console.warn('warn: weather: ' + e.message); }
+    try {
+      const m = await fetchMarkets();
+      data.markets = m.quotes;
+      if (m.wanted && !m.quotes.length) data.warnings.push('Market quotes are unavailable right now: the quote sources refused the request.');
+    } catch (e) { data.markets = []; console.warn('warn: markets: ' + e.message); }
+    try { data.weather = await fetchWeather(); } catch (e) { data.weather = null; console.warn('warn: weather: ' + e.message); data.warnings.push('Weather is unavailable right now.'); }
   }
   const blob = await encrypt(data, PASSPHRASE);
   await mkdir(dirname(OUT), { recursive: true });
