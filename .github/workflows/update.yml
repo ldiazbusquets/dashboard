@@ -29,12 +29,24 @@ jobs:
         with:
           node-version: 22
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Collect the site files
         run: |
           mkdir -p site
           cp index.html app.js style.css config.js site/
           find videos -maxdepth 1 -type f \( -iname '*.mp4' -o -iname '*.webm' \) -exec cp {} site/ \; 2>/dev/null || true
           (ls site | grep -Ei '\.(mp4|webm)$' || true) | jq -R . | jq -s . > site/videos.json
+
+      - name: Fetch market quotes
+        continue-on-error: true
+        env:
+          TICKERS: ${{ secrets.TICKERS }}
+        run: |
+          pip install --quiet yfinance
+          python quotes.py
 
       - name: Fetch Canvas data and encrypt it
         env:
@@ -43,6 +55,9 @@ jobs:
           DASH_PASSPHRASE: ${{ secrets.DASH_PASSPHRASE }}
           TICKERS: ${{ secrets.TICKERS }}
           WEATHER_LOCATION: ${{ secrets.WEATHER_LOCATION }}
+          ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
           WINDOW_DAYS: "14"
           INCLUDE_GRADES: "true"
         run: node fetch-canvas.mjs
