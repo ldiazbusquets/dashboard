@@ -15,7 +15,7 @@
 // NOTE: Actions logs are public on a public repo, so this script only ever
 // logs counts, never course or assignment names.
 
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 const OUT = process.env.OUT_FILE || 'site/data.enc.json';
@@ -287,6 +287,63 @@ async function yahooQuote(sym, host) {
   return quote(sym, price, closes);
 }
 
+// Preferred source when ALPACA_KEY_ID and ALPACA_SECRET_KEY are set: Alpaca's market data API
+// (US stocks and ETFs, free IEX feed). Two requests cover every symbol at once.
+async function alpacaQuotes(symbols) {
+  const id = (process.env.ALPACA_KEY_ID || '').trim(), secret = (process.env.ALPACA_SECRET_KEY || '').trim();
+  const list = symbols.filter((x) => /^[A-Z][A-Z.]*$/.test(x));
+  if (!id || !secret || !list.length) return new Map();
+  const headers = { 'APCA-API-KEY-ID': id, 'APCA-API-SECRET-KEY': secret, Accept: 'application/json' };
+  const q = encodeURIComponent(list.join(','));
+  const get = async (path) => {
+    const res = await fetch('https://data.alpaca.markets/v2/stocks/' + path, { headers });
+    if (!res.ok) throw new Error(`alpaca ${res.status}`);
+    return res.json();
+  };
+  const snaps = await get(`snapshots?symbols=${q}&feed=iex`);
+  let bars = {};
+  try {
+    const start = new Date(Date.now() - 45 * 864e5).toISOString().slice(0, 10);
+    bars = (await get(`bars?symbols=${q}&timeframe=1Day&start=${start}&limit=1000&adjustment=split&feed=iex`)).bars || {};
+  } catch (e) { console.warn('warn: price history unavailable (' + e.message + ')'); }
+  const out = new Map();
+  for (const sym of list) {
+    const sn = (snaps.snapshots || snaps)[sym];
+    const price = sn?.latestTrade?.p ?? sn?.dailyBar?.c;
+    if (typeof price !== 'number') continue;
+    const prev = sn?.prevDailyBar?.c;
+    const closes = (bars[sym] || []).map((b) => b.c).filter((x) => typeof x === 'number');
+    if (closes.length) closes[closes.length - 1] = price;
+    out.set(sym, {
+      symbol: sym, price,
+      changePct: typeof prev === 'number' && prev ? ((price - prev) / prev) * 100 : null,
+      spark: closes.slice(-22).map((x) => Math.round(x * 100) / 100),
+    });
+  }
+  return out;
+}
+
+// quotes.json, written by quotes.py (yfinance) earlier in the workflow, if that step ran.
+async function fileQuotes() {
+  try {
+    const list = JSON.parse(await readFile(process.env.QUOTES_FILE || 'quotes.json', 'utf8'));
+    return new Map((Array.isArray(list) ? list : [])
+      .filter((q) => q && typeof q.symbol === 'string' && typeof q.price === 'number')
+      .map((q) => [q.symbol.toUpperCase(), { symbol: q.symbol.toUpperCase(), price: q.price, changePct: typeof q.changePct === 'number' ? q.changePct : null, spark: Array.isArray(q.spark) ? q.spark.filter((x) => typeof x === 'number').slice(-22) : [] }]));
+  } catch { return new Map(); }
+}
+
+// Finnhub, when the FINNHUB_KEY secret is set: price and day change, no history.
+async function finnhubQuote(sym) {
+  const key = (process.env.FINNHUB_KEY || '').trim();
+  if (!key) throw new Error('finnhub not configured');
+  const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(sym)}`, { headers: { 'X-Finnhub-Token': key } });
+  if (!res.ok) throw new Error(`finnhub ${res.status}`);
+  const j = await res.json();
+  if (typeof j.c !== 'number' || j.c <= 0) throw new Error('finnhub no data');
+  return { symbol: sym, price: j.c, changePct: typeof j.dp === 'number' ? j.dp : (j.pc ? ((j.c - j.pc) / j.pc) * 100 : null), spark: [] };
+}
+
 // Backup source: Stooq end-of-day history (US-listed stocks and ETFs only).
 async function stooqQuote(sym) {
   if (!/^[A-Z][A-Z0-9.-]*$/.test(sym)) throw new Error('stooq unsupported symbol');
@@ -308,8 +365,13 @@ export async function fetchMarkets() {
     .filter((x) => /^[A-Z0-9.^=-]{1,12}$/.test(x)).slice(0, 12);
   const quotes = [];
   const reasons = new Set();
+  let fromAlpaca = new Map();
+  try { fromAlpaca = await alpacaQuotes(symbols); } catch (e) { reasons.add(e.message); }
+  const fromFile = await fileQuotes();
   for (const sym of symbols) {
-    const attempts = [() => yahooQuote(sym, 'query1.finance.yahoo.com'), () => yahooQuote(sym, 'query2.finance.yahoo.com'), () => stooqQuote(sym)];
+    if (fromAlpaca.has(sym)) { quotes.push(fromAlpaca.get(sym)); continue; }
+    if (fromFile.has(sym)) { quotes.push(fromFile.get(sym)); continue; }
+    const attempts = [() => finnhubQuote(sym), () => yahooQuote(sym, 'query1.finance.yahoo.com'), () => yahooQuote(sym, 'query2.finance.yahoo.com'), () => stooqQuote(sym)];
     for (const attempt of attempts) {
       try { quotes.push(await attempt()); break; } catch (e) { reasons.add(e.message); }
     }
@@ -384,7 +446,7 @@ if (!process.env.NO_MAIN) try {
     try {
       const m = await fetchMarkets();
       data.markets = m.quotes;
-      if (m.wanted && !m.quotes.length) data.warnings.push('Market quotes are unavailable right now: the quote sources refused the request.');
+      if (m.wanted && !m.quotes.length) data.warnings.push('Market quotes are unavailable right now: every quote source refused the request.');
     } catch (e) { data.markets = []; console.warn('warn: markets: ' + e.message); }
     try { data.weather = await fetchWeather(); } catch (e) { data.weather = null; console.warn('warn: weather: ' + e.message); data.warnings.push('Weather is unavailable right now.'); }
   }
