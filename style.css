@@ -152,12 +152,13 @@ button:disabled { opacity: 0.6; cursor: default; }
 .chip.late { background: var(--danger-bg); color: var(--danger); }
 .chip.ok { color: var(--accent); }
 
-/* ---------- Brand watermark: the LDB signature as clear glass ---------- */
+/* ---------- Brand watermark: the LDB mark as clear glass ----------
+   Sized to match the mark on the main site (Archivo at .95rem = 15.2px). */
 .brand {
-  position: absolute; top: 24px; left: 28px; z-index: 1; height: 24px; width: auto; pointer-events: none;
-  filter: drop-shadow(0 1px 0 hsl(0 0% 100% / 0.25)) drop-shadow(0 6px 14px hsl(var(--h) 60% 4% / 0.5));
+  position: absolute; top: 24px; left: 28px; z-index: 1; height: 11.16px; width: auto; pointer-events: none;
+  filter: drop-shadow(0 1px 0 hsl(0 0% 100% / 0.22)) drop-shadow(0 4px 10px hsl(var(--h) 60% 4% / 0.5));
 }
-@media (max-width: 860px) { .brand { top: 16px; left: 18px; height: 19px; } }
+@media (max-width: 860px) { .brand { top: 18px; left: 18px; } }
 
 /* ---------- Hero extras ---------- */
 .hero-weather { font-size: 14.5px; color: hsl(0 0% 100% / 0.8); margin-top: 4px; text-shadow: 0 1px 14px hsl(0 0% 0% / 0.4); min-height: 1.5em; }
